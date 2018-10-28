@@ -38,10 +38,10 @@ struct FVaRestCallResponse
 };
 
 /**
- * Usefull tools for REST communications
+ * Useful tools for REST communications
  */
 UCLASS()
-class UVaRestLibrary : public UBlueprintFunctionLibrary
+class VARESTPLUGIN_API UVaRestLibrary : public UBlueprintFunctionLibrary
 {
 	GENERATED_BODY()
 
@@ -91,6 +91,18 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "VaRest|Utility", meta = (DisplayName = "Base64 Decode Data"))
 	static bool Base64DecodeData(const FString& Source, TArray<uint8>& Dest);
+
+
+	//////////////////////////////////////////////////////////////////////////
+	// File system integration
+
+public:
+	/** 
+	 * Load JSON from formatted text file
+	 * @param Path		File name relative to the Content folder
+	 */
+	UFUNCTION(BlueprintCallable, Category = "VaRest|Utility", meta = (WorldContext = "WorldContextObject"))
+	static class UVaRestJsonObject* LoadJsonFromFile(UObject* WorldContextObject, const FString& Path);
 
 
 	//////////////////////////////////////////////////////////////////////////

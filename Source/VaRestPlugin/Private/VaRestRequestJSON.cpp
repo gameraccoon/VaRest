@@ -1,7 +1,15 @@
 // Copyright 2014 Vladimir Alyamkin. All Rights Reserved.
 
+#include "VaRestRequestJSON.h"
+#include "VaRestJsonObject.h"
+#include "VaRestLibrary.h"
+#include "VaRestSettings.h"
 #include "VaRestPluginPrivatePCH.h"
-#include "CoreMisc.h"
+
+#include "Misc/CoreMisc.h"
+#include "Runtime/Launch/Resources/Version.h"
+
+FString UVaRestRequestJSON::DeprecatedResponseString(TEXT("DEPRECATED: Please use GetResponseContentAsString() instead"));
 
 template <class T> void FVaRestLatentAction<T>::Cancel()
 {
@@ -118,8 +126,12 @@ void UVaRestRequestJSON::ResetResponseData()
 
 	ResponseHeaders.Empty();
 	ResponseCode = -1;
+	ResponseSize = 0;
 
 	bIsValidJsonResponse = false;
+
+	// #127 Reset string to deprecated state
+	ResponseContent = DeprecatedResponseString;
 }
 
 void UVaRestRequestJSON::Cancel()
@@ -199,15 +211,25 @@ TArray<FString> UVaRestRequestJSON::GetAllResponseHeaders()
 //////////////////////////////////////////////////////////////////////////
 // URL processing
 
-void UVaRestRequestJSON::ProcessURL(const FString& Url)
+void UVaRestRequestJSON::SetURL(const FString& Url)
 {
 	// Be sure to trim URL because it can break links on iOS
 	FString TrimmedUrl = Url;
+
+#if ENGINE_MINOR_VERSION >= 18
+	TrimmedUrl.TrimStartInline();
+	TrimmedUrl.TrimEndInline();
+#else
 	TrimmedUrl.Trim();
 	TrimmedUrl.TrimTrailing();
-
+#endif
+	
 	HttpRequest->SetURL(TrimmedUrl);
+}
 
+void UVaRestRequestJSON::ProcessURL(const FString& Url)
+{
+	SetURL(Url);
 	ProcessRequest();
 }
 
@@ -215,13 +237,19 @@ void UVaRestRequestJSON::ApplyURL(const FString& Url, UVaRestJsonObject *&Result
 {
 	// Be sure to trim URL because it can break links on iOS
 	FString TrimmedUrl = Url;
+
+#if ENGINE_MINOR_VERSION >= 18
+	TrimmedUrl.TrimStartInline();
+	TrimmedUrl.TrimEndInline();
+#else
 	TrimmedUrl.Trim();
 	TrimmedUrl.TrimTrailing();
+#endif
 
 	HttpRequest->SetURL(TrimmedUrl);
 
 	// Prepare latent action
-	if (UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject))
+	if (UWorld* World = GEngine->GetWorldFromContextObjectChecked(WorldContextObject))
 	{
 		FLatentActionManager& LatentActionManager = World->GetLatentActionManager();
 		FVaRestLatentAction<UVaRestJsonObject*> *Kont = LatentActionManager.FindExistingAction<FVaRestLatentAction<UVaRestJsonObject*>>(LatentInfo.CallbackTarget, LatentInfo.UUID);
@@ -238,8 +266,22 @@ void UVaRestRequestJSON::ApplyURL(const FString& Url, UVaRestJsonObject *&Result
 	ProcessRequest();
 }
 
+void UVaRestRequestJSON::ExecuteProcessRequest()
+{
+	if (HttpRequest->GetURL().Len() == 0)
+	{
+		UE_LOG(LogVaRest, Error, TEXT("Request execution attempt with empty URL"));
+		return;
+	}
+
+	ProcessRequest();
+}
+
 void UVaRestRequestJSON::ProcessRequest()
 {
+	// Cache default settings for extended logs
+	const UVaRestSettings* DefaultSettings = GetDefault<UVaRestSettings>();
+
 	// Set verb
 	switch (RequestVerb)
 	{
@@ -301,7 +343,15 @@ void UVaRestRequestJSON::ProcessRequest()
 			HttpRequest->SetContentAsString(StringRequestContent);
 		}
 
-		UE_LOG(LogVaRest, Log, TEXT("Request (urlencoded): %s %s %s"), *HttpRequest->GetVerb(), *HttpRequest->GetURL(), *UrlParams, *StringRequestContent);
+		// Check extended log to avoid security vulnerability (#133)
+		if (DefaultSettings->bExtendedLog)
+		{
+			UE_LOG(LogVaRest, Log, TEXT("%s: Request (urlencoded): %s %s %s %s"), *VA_FUNC_LINE, *HttpRequest->GetVerb(), *HttpRequest->GetURL(), *UrlParams, *StringRequestContent);
+		}
+		else
+		{
+			UE_LOG(LogVaRest, Log, TEXT("%s: Request (urlencoded): %s %s (check bExtendedLog for additional data)"), *VA_FUNC_LINE, *HttpRequest->GetVerb(), *HttpRequest->GetURL());
+		}
 
 		break;
 	}
@@ -330,7 +380,15 @@ void UVaRestRequestJSON::ProcessRequest()
 		// Apply params
 		HttpRequest->SetContentAsString(UrlParams);
 
-		UE_LOG(LogVaRest, Log, TEXT("Request (url body): %s %s %s"), *HttpRequest->GetVerb(), *HttpRequest->GetURL(), *UrlParams);
+		// Check extended log to avoid security vulnerability (#133)
+		if (DefaultSettings->bExtendedLog)
+		{
+			UE_LOG(LogVaRest, Log, TEXT("%s: Request (url body): %s %s %s"), *VA_FUNC_LINE, *HttpRequest->GetVerb(), *HttpRequest->GetURL(), *UrlParams);
+		}
+		else
+		{
+			UE_LOG(LogVaRest, Log, TEXT("%s: Request (url body): %s %s (check bExtendedLog for additional data)"), *VA_FUNC_LINE, *HttpRequest->GetVerb(), *HttpRequest->GetURL());
+		}
 
 		break;
 	}
@@ -404,11 +462,10 @@ void UVaRestRequestJSON::OnProcessRequestComplete(FHttpRequestPtr Request, FHttp
 		return;
 	}
 
-	// Save response data as a string
-	ResponseContent = Response->GetContentAsString();
-
+#if !(PLATFORM_IOS || PLATFORM_ANDROID)
 	// Log response state
-	UE_LOG(LogVaRest, Log, TEXT("Response (%d): %sJSON(%s%s%s)JSON"), ResponseCode, LINE_TERMINATOR, LINE_TERMINATOR, *ResponseContent, LINE_TERMINATOR);
+	UE_LOG(LogVaRest, Log, TEXT("Response (%d): %sJSON(%s%s%s)JSON"), ResponseCode, LINE_TERMINATOR, LINE_TERMINATOR, *Response->GetContentAsString(), LINE_TERMINATOR);
+#endif
 
 	// Process response headers
 	TArray<FString> Headers = Response->GetAllHeaders();
@@ -421,14 +478,21 @@ void UVaRestRequestJSON::OnProcessRequestComplete(FHttpRequestPtr Request, FHttp
 			ResponseHeaders.Add(Key, Value);
 		}
 	}
-
+	
 	// Try to deserialize data to JSON
-	TSharedRef<TJsonReader<TCHAR>> JsonReader = TJsonReaderFactory<TCHAR>::Create(ResponseContent);
-	FJsonSerializer::Deserialize(JsonReader, ResponseJsonObj->GetRootObject());
-
+	const TArray<uint8>& Bytes = Response->GetContent();
+	ResponseSize = ResponseJsonObj->DeserializeFromUTF8Bytes((const ANSICHAR*) Bytes.GetData(), Bytes.Num());
+	
 	// Decide whether the request was successful
-	bIsValidJsonResponse = bWasSuccessful && ResponseJsonObj->GetRootObject().IsValid();
-
+	bIsValidJsonResponse = bWasSuccessful && (ResponseSize > 0);
+	
+	if (!bIsValidJsonResponse)
+	{
+		// Save response data as a string
+		ResponseContent = Response->GetContentAsString();
+		ResponseSize = ResponseContent.GetAllocatedSize();
+	}
+	
 	// Log errors
 	if (!bIsValidJsonResponse)
 	{
@@ -474,4 +538,44 @@ int32 UVaRestRequestJSON::RemoveTag(FName Tag)
 bool UVaRestRequestJSON::HasTag(FName Tag) const
 {
 	return (Tag != NAME_None) && Tags.Contains(Tag);
+}
+
+
+//////////////////////////////////////////////////////////////////////////
+// Data
+
+FString UVaRestRequestJSON::GetResponseContentAsString(bool bCacheResponseContent)
+{
+	// Check we have valid json response
+	if (!bIsValidJsonResponse)
+	{
+		// We've cached response content in OnProcessRequestComplete()
+		return ResponseContent;
+	}
+
+	// Check we have valid response object
+	if (!ResponseJsonObj || !ResponseJsonObj->IsValidLowLevel())
+	{
+		// Discard previous cached string if we had one
+		ResponseContent = DeprecatedResponseString;
+
+		return TEXT("Invalid response");
+	}
+
+	// Check if we should re-genetate it in runtime
+	if (!bCacheResponseContent)
+	{
+		UE_LOG(LogVaRest, Warning, TEXT("%s: Use of uncashed getter could be slow"), *VA_FUNC_LINE);
+		return ResponseJsonObj->EncodeJson();
+	}
+	
+	// Check that we haven't cached content yet
+	if (ResponseContent == DeprecatedResponseString)
+	{
+		UE_LOG(LogVaRest, Warning, TEXT("%s: Response content string is cached"), *VA_FUNC_LINE);
+		ResponseContent = ResponseJsonObj->EncodeJson();
+	}
+
+	// Return previously cached content now
+	return ResponseContent;
 }

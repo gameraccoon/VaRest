@@ -4,17 +4,9 @@ using UnrealBuildTool;
 
 public class VaRestEditorPlugin : ModuleRules
 {
-	public VaRestEditorPlugin(TargetInfo Target)
+	public VaRestEditorPlugin(ReadOnlyTargetRules Target) : base(Target)
 	{
-		
-		PublicIncludePaths.AddRange(
-			new string[] {
-				"VaRestPlugin",
-				"VaRestPlugin/Public"
-				
-				// ... add public include paths required here ...
-			});
-				
+        PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 		
 		PrivateIncludePaths.AddRange(
 			new string[] {

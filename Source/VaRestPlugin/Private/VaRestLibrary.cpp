@@ -1,39 +1,17 @@
 // Copyright 2016 Vladimir Alyamkin. All Rights Reserved.
 
+#include "VaRestLibrary.h"
+#include "VaRestRequestJSON.h"
+#include "VaRestJsonObject.h"
 #include "VaRestPluginPrivatePCH.h"
-#include "Base64.h"
+#include "Misc/Base64.h"
 
 //////////////////////////////////////////////////////////////////////////
 // Helpers
 
 FString UVaRestLibrary::PercentEncode(const FString& Source)
 {
-	FString OutText = Source;
-	
-	OutText = OutText.Replace(TEXT(" "), TEXT("%20"));
-	OutText = OutText.Replace(TEXT("!"), TEXT("%21"));
-	OutText = OutText.Replace(TEXT("\""), TEXT("%22"));
-	OutText = OutText.Replace(TEXT("#"), TEXT("%23"));
-	OutText = OutText.Replace(TEXT("$"), TEXT("%24"));
-	OutText = OutText.Replace(TEXT("&"), TEXT("%26"));
-	OutText = OutText.Replace(TEXT("'"), TEXT("%27"));
-	OutText = OutText.Replace(TEXT("("), TEXT("%28"));
-	OutText = OutText.Replace(TEXT(")"), TEXT("%29"));
-	OutText = OutText.Replace(TEXT("*"), TEXT("%2A"));
-	OutText = OutText.Replace(TEXT("+"), TEXT("%2B"));
-	OutText = OutText.Replace(TEXT(","), TEXT("%2C"));
-	OutText = OutText.Replace(TEXT("/"), TEXT("%2F"));
-	OutText = OutText.Replace(TEXT(":"), TEXT("%3A"));
-	OutText = OutText.Replace(TEXT(";"), TEXT("%3B"));
-	OutText = OutText.Replace(TEXT("="), TEXT("%3D"));
-	OutText = OutText.Replace(TEXT("?"), TEXT("%3F"));
-	OutText = OutText.Replace(TEXT("@"), TEXT("%40"));
-	OutText = OutText.Replace(TEXT("["), TEXT("%5B"));
-	OutText = OutText.Replace(TEXT("]"), TEXT("%5D"));
-	OutText = OutText.Replace(TEXT("{"), TEXT("%7B"));
-	OutText = OutText.Replace(TEXT("}"), TEXT("%7D"));
-	
-	return OutText;
+	return FGenericPlatformHttp::UrlEncode(Source);
 }
 
 FString UVaRestLibrary::Base64Encode(const FString& Source)
@@ -64,11 +42,39 @@ bool UVaRestLibrary::Base64DecodeData(const FString& Source, TArray<uint8>& Dest
 
 
 //////////////////////////////////////////////////////////////////////////
+// File system integration
+
+class UVaRestJsonObject* UVaRestLibrary::LoadJsonFromFile(UObject* WorldContextObject, const FString& Path)
+{
+	UVaRestJsonObject* Json = UVaRestJsonObject::ConstructJsonObject(WorldContextObject);
+
+	FString JSONString;
+	if (FFileHelper::LoadFileToString(JSONString, *(FPaths::ProjectContentDir() + Path)))
+	{
+		if (Json->DecodeJson(JSONString))
+		{
+			return Json;
+		}
+		else
+		{
+			UE_LOG(LogVaRest, Error, TEXT("%s: Can't decode json from file %s"), *VA_FUNC_LINE, *Path);
+		}
+	}
+	else
+	{
+		UE_LOG(LogVaRest, Error, TEXT("%s: Can't open file %s"), *VA_FUNC_LINE, *Path);
+	}
+
+	return nullptr;
+}
+
+
+//////////////////////////////////////////////////////////////////////////
 // Easy URL processing
 
 void UVaRestLibrary::CallURL(UObject* WorldContextObject, const FString& URL, ERequestVerb Verb, ERequestContentType ContentType, UVaRestJsonObject* VaRestJson, const FVaRestCallDelegate& Callback)
 {
-	UWorld* World = GEngine->GetWorldFromContextObject(WorldContextObject);
+	UWorld* World = GEngine->GetWorldFromContextObjectChecked(WorldContextObject);
 	if (World == nullptr)
 	{
 		UE_LOG(LogVaRest, Error, TEXT("UVaRestLibrary: Wrong world context"))
